@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 /// Загружает URL и возвращает тело как строку (потеря некорректных UTF-8 — replacement).
-pub async fn fetch_text(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
+pub async fn fetch_text(client: &reqwest::Client, url: &str) -> reqwest::Result<String> {
     let resp = client
         .get(url)
         .timeout(Duration::from_secs(15))

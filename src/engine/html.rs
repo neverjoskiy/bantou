@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use html5ever::parse_document;
-use html5ever::tree_builder::TreeSink;
+use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
 #[derive(Debug, Clone)]

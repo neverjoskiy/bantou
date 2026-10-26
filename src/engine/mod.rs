@@ -5,7 +5,7 @@ pub mod net;
 /// Text nodes carry the string and the tag context that styled it.
 #[derive(Debug, Clone)]
 pub enum BoxContent {
-    Text(String, TextSpec),
+    Text(String, FontSpec),
     Rule,
 }
 
