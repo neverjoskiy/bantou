@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 
 // One open tab as seen by the UI.
 export struct TabInfo {
@@ -30,17 +31,10 @@ export component TabButton inherits Rectangle {
     height: Theme.tabbar-height - 10px;
     min-width: Theme.tab-width;
     border-radius: Theme.shape-corner-m;
-    background: active ? Theme.surface-container-highest : transparent;
+    background: active ? Theme.surface-container-highest : (ta.has-hover ? Theme.surface-container-low : transparent);
     animate background { duration: Theme.motion-short; easing: Theme.ease-emphasized; }
 
-    // Spring lift on hover — tactile M3 Expressive feedback.
-    states [
-        hovered when self.has-hover: {
-            background: active ? Theme.surface-container-highest : Theme.surface-container-low;
-        }
-    ]
-
-    TouchArea {
+    ta := TouchArea {
         clicked => { root.clicked(); }
     }
 
@@ -85,7 +79,9 @@ export component TabButton inherits Rectangle {
                 height: 100%;
             }
 
-            tap-handler => { root.close-clicked(); }
+            TouchArea {
+                clicked => { root.close-clicked(); }
+            }
         }
     }
 }
@@ -281,7 +277,7 @@ export component BrowserWindow inherits Window {
                     horizontal-stretch: 1;
                     border-radius: Theme.shape-corner-full;
                     background: Theme.surface-container-highest;
-                    border-width: url-focus-area.has-focus ? 2px : 0px;
+                    border-width: url_input.has-focus ? 2px : 0px;
                     border-color: Theme.primary;
                     animate border-width { duration: Theme.motion-short; }
 
@@ -289,12 +285,12 @@ export component BrowserWindow inherits Window {
                         padding-left: 20px;
                         padding-right: 12px;
                         spacing: 12px;
-                        alignment: center;
+                        alignment: LayoutAlignment.center;
 
                         Text { text: "🔍"; color: Theme.on-surface-variant; vertical-alignment: center; }
 
                         LineEdit {
-                            id: url-input;
+                            id: url_input;
                             text: root.current-url;
                             placeholder-text: "Поиск в Google или адрес сайта";
                             font-size: Theme.font-body-m;
@@ -306,7 +302,7 @@ export component BrowserWindow inherits Window {
 
                     property <bool> has-focus;
                     url-focus-area := TouchArea {
-                        clicked => { url-input.focus(); }
+                        clicked => { url_input.focus(); }
                     }
                 }
 
