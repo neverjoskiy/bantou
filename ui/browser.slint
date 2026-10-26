@@ -289,12 +289,10 @@ export component BrowserWindow inherits Window {
 
                         Text { text: "🔍"; color: Theme.on-surface-variant; vertical-alignment: center; }
 
-                        LineEdit {
-                            id: url_input;
+                        url_input := LineEdit {
                             text: root.current-url;
                             placeholder-text: "Поиск в Google или адрес сайта";
                             font-size: Theme.font-body-m;
-                            vertical-alignment: center;
                             horizontal-stretch: 1;
                             accepted => { root.navigate(self.text); }
                         }
@@ -344,7 +342,7 @@ export component BrowserWindow inherits Window {
             background: Theme.surface-container-lowest;
 
             if page-boxes.length == 0 && page-text == "" && load-progress >= 1: VerticalLayout {
-                alignment: center;
+                alignment: LayoutAlignment.center;
                 spacing: 16px;
                 Text {
                     text: "Bantou";
