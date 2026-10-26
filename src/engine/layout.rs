@@ -1,18 +1,18 @@
-//! Фаза 2: бокс-модель — превращает DOM в список `LaidOutBox` (блоки + инлайн-текст).
-//!
-//! Пока без CSS: типографика берётся из тегов (h1–h6, p, br). Ширина текстовых
-//! боксов аппроксимируется по средней ширине символа; точный paint приходит в фазе 3.
+//! Фаза 2/3: бокс-модель + мини-CSS.
 
 use super::html::DomNode;
+use super::style;
 use super::{BoxContent, BoxKind, FontSpec, LaidOutBox};
 
 /// Средняя ширина глифа как доля от кегля (аппроксимация для переноса).
 const AVG_GLYPH_RATIO: f32 = 0.52;
 
 pub fn layout(root: &DomNode, viewport_width: f32) -> Vec<LaidOutBox> {
+    let rules = style::collect_rules(root);
     let mut ctx = LayoutCtx { boxes: Vec::new(), cursor_y: 0.0, viewport_width };
+    let base_style = style::Style::default();
     for child in &root.children {
-        layout_node(child, &mut ctx, FontSpec::default(), None);
+        layout_node(child, &mut ctx, FontSpec::default(), None, base_style, &rules);
     }
     ctx.boxes
 }
@@ -85,7 +85,7 @@ fn wrap_lines(text: &str, font: &FontSpec, max_width: f32) -> Vec<String> {
     lines
 }
 
-fn push_text_lines(ctx: &mut LayoutCtx, text: &str, font: FontSpec, inline: bool, link: Option<String>) {
+fn push_text_lines(ctx: &mut LayoutCtx, text: &str, font: FontSpec, inline: bool, link: Option<String>, color: Option<(u8, u8, u8)>) {
     let max_width = ctx.viewport_width;
     if max_width <= 0.0 {
         return;
@@ -104,42 +104,47 @@ fn push_text_lines(ctx: &mut LayoutCtx, text: &str, font: FontSpec, inline: bool
             kind: if inline { BoxKind::InlineText } else { BoxKind::Block },
             content: BoxContent::Text(line, font),
             link: link.clone(),
+            color,
         });
         ctx.cursor_y += height;
     }
 }
 
-/// Инлайновое содержимое: текст и строчные теги слиянием шрифтов.
-fn layout_inline(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option<String>) {
+fn layout_inline(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option<String>, style: style::Style, rules: &[style::Rule]) {
     match node.tag.as_str() {
         "" => {
             if !node.text.is_empty() {
-                push_text_lines(ctx, &squash(&node.text), font, true, link);
+                push_text_lines(ctx, &squash(&node.text), font, true, link, style.color);
             }
         }
         "br" => ctx.cursor_y += line_height(&font),
         "img" => {}
         _ => {
             let inner = font_for(&node.tag);
-            let merged =
-                FontSpec { size: font.size, weight: inner.weight.max(font.weight) };
+            let mut merged = FontSpec { size: font.size, weight: inner.weight.max(font.weight) };
+            let node_style = style::compute_style(node, rules, &style);
+            if let Some(sz) = node_style.font_size {
+                merged.size = sz;
+            }
+            if let Some(wt) = node_style.font_weight {
+                merged.weight = wt;
+            }
             let new_link = if node.tag == "a" {
                 node.link.clone().or_else(|| node.attrs.get("href").cloned())
             } else {
                 link.clone()
             };
             for child in &node.children {
-                layout_inline(child, ctx, merged, new_link.clone());
+                layout_inline(child, ctx, merged, new_link.clone(), node_style, rules);
             }
-            // text directly inside inline element (if any) already as children text nodes
         }
     }
 }
 
-fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option<String>) {
+fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option<String>, style: style::Style, rules: &[style::Rule]) {
     if node.tag.is_empty() {
         if !node.text.trim().is_empty() {
-            push_text_lines(ctx, &squash(&node.text), font, false, link);
+            push_text_lines(ctx, &squash(&node.text), font, false, link, style.color);
         }
         return;
     }
@@ -156,6 +161,7 @@ fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option
                 kind: BoxKind::Rule,
                 content: BoxContent::Rule,
                 link: None,
+                color: style.color,
             });
             ctx.cursor_y += 1.0 + after;
         }
@@ -163,19 +169,28 @@ fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option
         t if is_block(t) => {
             let (before, after) = block_spacing(t);
             ctx.cursor_y += before;
-            let inner = font_for(t);
-            let font = if inner.size > font.size { inner } else { font };
+            let mut inner = font_for(t);
+            if inner.size <= font.size {
+                inner.size = font.size;
+            }
+            let node_style = style::compute_style(node, rules, &style);
+            if let Some(sz) = node_style.font_size {
+                inner.size = sz;
+            }
+            if let Some(wt) = node_style.font_weight {
+                inner.weight = wt;
+            }
             let new_link = if t == "a" {
                 node.link.clone().or_else(|| node.attrs.get("href").cloned())
             } else {
                 link.clone()
             };
             for child in &node.children {
-                layout_node(child, ctx, font, new_link.clone());
+                layout_node(child, ctx, inner, new_link.clone(), node_style, rules);
             }
             ctx.cursor_y += after;
         }
-        _ => layout_inline(node, ctx, font, link),
+        _ => layout_inline(node, ctx, font, link, style, rules),
     }
 }
 
@@ -196,3 +211,5 @@ fn squash(text: &str) -> String {
     }
     out
 }
+EOF
+Write-Host done

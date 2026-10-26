@@ -18,6 +18,7 @@ export struct BoxView {
     text: string,
     is-rule: bool,
     link: string,
+    color: color,
 }
 
 export component TabButton inherits Rectangle {
@@ -389,7 +390,7 @@ export component BrowserWindow inherits Window {
                             text: box.text;
                             font-size: box.size * 1px;
                             font-weight: box.weight;
-                            color: box.link != "" ? Theme.primary : Theme.on-surface;
+                            color: box.color;
                             wrap: no-wrap;
                         }
                         if box.link != "": TouchArea {

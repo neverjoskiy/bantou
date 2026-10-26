@@ -1,6 +1,7 @@
 pub mod html;
 pub mod layout;
 pub mod net;
+pub mod style;
 
 /// Text nodes carry the string and the tag context that styled it.
 #[derive(Debug, Clone)]
@@ -37,4 +38,5 @@ pub struct LaidOutBox {
     pub kind: BoxKind,
     pub content: BoxContent,
     pub link: Option<String>,
+    pub color: Option<(u8, u8, u8)>,
 }

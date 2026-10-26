@@ -63,6 +63,9 @@ fn boxes_to_view(boxes: &[LaidOutBox]) -> (Vec<BoxView>, f32) {
             ),
             BoxContent::Rule => (String::new(), 0.0, 0, true, String::new()),
         };
+        let rgb = b.color.unwrap_or_else(|| {
+            if b.link.is_some() { (103, 80, 164) } else { (29, 27, 32) }
+        });
         views.push(BoxView {
             x: b.x,
             y: b.y,
@@ -73,6 +76,7 @@ fn boxes_to_view(boxes: &[LaidOutBox]) -> (Vec<BoxView>, f32) {
             text: text.into(),
             is_rule,
             link: link.into(),
+            color: slint::Color::from_rgb_u8(rgb.0, rgb.1, rgb.2),
         });
         height = height.max(b.y + b.height);
     }
