@@ -1,0 +1,329 @@
+import { Theme } from "theme.slint";
+
+// One open tab as seen by the UI.
+export struct TabInfo {
+    id: int,
+    title: string,
+    loading: bool,
+}
+
+export component TabButton inherits Rectangle {
+    in property <int> tab-id;
+    in property <string> tab-title;
+    in property <bool> active;
+    in property <bool> loading;
+    callback clicked();
+    callback close-clicked();
+
+    height: Theme.tabbar-height - 10px;
+    min-width: Theme.tab-width;
+    border-radius: Theme.shape-corner-m;
+    background: active ? Theme.surface-container-highest : transparent;
+    animate background { duration: Theme.motion-short; easing: Theme.ease-emphasized; }
+
+    // Spring lift on hover — tactile M3 Expressive feedback.
+    states [
+        hovered when self.has-hover: {
+            background: active ? Theme.surface-container-highest : Theme.surface-container-low;
+        }
+    ]
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 8px;
+
+        Rectangle { // favicon slot / loading spinner
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.shape-corner-full;
+            background: root.loading ? Theme.primary : Theme.outline-variant;
+            animate background { duration: Theme.motion-short; }
+        }
+
+        Text {
+            vertical-alignment: center;
+            text: root.tab-title;
+            font-size: Theme.font-title-s;
+            font-weight: root.active ? 600 : 400;
+            color: Theme.on-surface;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.shape-corner-full;
+            background: transparent;
+
+            Text {
+                text: "✕";
+                font-size: 11px;
+                color: Theme.on-surface-variant;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+
+            tap-handler => { root.close-clicked(); }
+        }
+    }
+}
+
+export component BrowserWindow inherits Window {
+    title: "Bantou";
+    background: Theme.surface;
+    preferred-width: 1200px;
+    preferred-height: 800px;
+
+    // ── State driven from Rust ──────────────────────────────────
+    in property <[TabInfo]> tabs;
+    in property <int> active-tab-id;
+    in property <string> page-title: "New Tab";
+    in property <string> page-text: "";
+    in property <string> current-url;
+    in property <float> load-progress: 0;      // 0..1, NaN/0 = idle
+    in property <[string]> history-entries;
+    in property <[string]> bookmark-entries;
+
+    // ── Events to Rust ──────────────────────────────────────────
+    callback navigate(string);
+    callback tab-selected(int);
+    callback tab-closed(int);
+    callback new-tab();
+    callback bookmark-toggled();
+
+    private property <bool> sidebar-open: false;
+    private property <bool> url-focused: false;
+
+    // ── Navigation rail (sidebar) ───────────────────────────────
+    Rectangle {
+        x: 0;
+        y: Theme.tabbar-height + Theme.urlbar-height;
+        width: sidebar-open ? Theme.rail-width-expanded : Theme.rail-width-collapsed;
+        height: parent.height - self.y;
+        background: Theme.surface-container-low;
+        animate width {
+            duration: Theme.motion-long;
+            easing: Theme.ease-emphasized;
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 4px;
+
+            // Extended FAB ↔ icon FAB morph
+            Rectangle {
+                height: Theme.fab-size;
+                border-radius: Theme.shape-corner-xl;
+                background: Theme.primary-container;
+                animate border-radius { duration: Theme.motion-medium; easing: Theme.ease-emphasized; }
+
+                states [
+                    expanded when sidebar-open: { border-radius: Theme.shape-corner-full; }
+                ]
+
+                HorizontalLayout {
+                    alignment: sidebar-open ? LayoutAlignment.start : LayoutAlignment.center;
+                    padding-left: sidebar-open ? 14px : 0px;
+                    padding-right: sidebar-open ? 14px : 0px;
+                    animate padding-left, padding-right { duration: Theme.motion-medium; }
+
+                    Text {
+                        text: "＋";
+                        font-size: 24px;
+                        color: Theme.on-primary-container;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        visible: sidebar-open;
+                        text: "Новая вкладка";
+                        font-size: Theme.font-label-l;
+                        font-weight: 500;
+                        color: Theme.on-primary-container;
+                        vertical-alignment: center;
+                        animate opacity { duration: Theme.motion-medium; }
+                    }
+                }
+
+                TouchArea {
+                    clicked => { root.new-tab(); }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                for entry in history-entries: Rectangle {
+                    height: 40px;
+                    border-radius: Theme.shape-corner-full;
+                    background: transparent;
+                    animate background { duration: Theme.motion-short; }
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        spacing: 12px;
+                        Text { text: "🕘"; color: Theme.on-surface-variant; vertical-alignment: center; }
+                        Text {
+                            text: entry;
+                            color: Theme.on-surface;
+                            font-size: Theme.font-body-s;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        clicked => { root.navigate(entry); }
+                    }
+                }
+            }
+        }
+
+        // Rail edge — click to toggle expanded/collapsed
+        TouchArea {
+            x: parent.width - 4px;
+            width: 8px;
+            clicked => { sidebar-open = !sidebar-open; }
+        }
+    }
+
+    // ── Main column ─────────────────────────────────────────────
+    VerticalLayout {
+        x: sidebar-open ? Theme.rail-width-expanded : Theme.rail-width-collapsed;
+        animate x { duration: Theme.motion-long; easing: Theme.ease-emphasized; }
+
+        // ── Tab strip (M3 top app bar) ──────────────────────────
+        Rectangle {
+            height: Theme.tabbar-height;
+            background: Theme.surface-container;
+            HorizontalLayout {
+                padding: 5px;
+                padding-left: 8px;
+                spacing: 4px;
+                for tab in tabs: TabButton {
+                    active: tab.id == root.active-tab-id;
+                    loading: tab.loading;
+                    tab-title: tab.title;
+                    clicked => { root.tab-selected(tab.id); }
+                    close-clicked => { root.tab-closed(tab.id); }
+                }
+                Rectangle { horizontal-stretch: 1; } // spacer
+            }
+        }
+
+        // ── URL bar ─────────────────────────────────────────────
+        Rectangle {
+            height: Theme.urlbar-height;
+            background: Theme.surface-container-low;
+
+            HorizontalLayout {
+                padding: 8px 12px;
+                spacing: 8px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.shape-corner-full;
+                    background: Theme.surface-container-highest;
+                    border-width: url-focus-area.has-focus ? 2px : 0px;
+                    border-color: Theme.primary;
+                    animate border-width { duration: Theme.motion-short; }
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 12px;
+                        spacing: 12px;
+                        alignment: center;
+
+                        Text { text: "🔍"; color: Theme.on-surface-variant; vertical-alignment: center; }
+
+                        LineEdit {
+                            id: url-input;
+                            text: root.current-url;
+                            placeholder-text: "Поиск в Google или адрес сайта";
+                            font-size: Theme.font-body-m;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            accepted => { root.navigate(self.text); }
+                        }
+                    }
+
+                    property <bool> has-focus;
+                    url-focus-area := TouchArea {
+                        clicked => { url-input.focus(); }
+                    }
+                }
+
+                // Icon button: bookmark toggle
+                Rectangle {
+                    width: 48px;
+                    border-radius: Theme.shape-corner-full;
+                    background: transparent;
+                    Text {
+                        text: "☆";
+                        font-size: 20px;
+                        color: Theme.on-surface-variant;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                    TouchArea {
+                        clicked => { root.bookmark-toggled(); }
+                    }
+                }
+            }
+
+            // M3 linear progress (wavy feel via eased width)
+            Rectangle {
+                y: parent.height - 3px;
+                height: 3px;
+                width: parent.width * clamp(load-progress, 0, 1);
+                border-radius: Theme.shape-corner-full;
+                background: Theme.primary;
+                opacity: load-progress > 0 && load-progress < 1 ? 1 : 0;
+                animate opacity { duration: Theme.motion-medium; }
+                animate width { duration: Theme.motion-short; }
+            }
+        }
+
+        // ── Page content (Phase 2: laid-out boxes / Phase 1: text) ──
+        Rectangle {
+            background: Theme.surface-container-lowest;
+
+            if page-text == "" && load-progress >= 1: VerticalLayout {
+                alignment: center;
+                spacing: 16px;
+                Text {
+                    text: "Bantou";
+                    font-size: Theme.font-display-s;
+                    font-weight: 500;
+                    color: Theme.primary;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Введите запрос — поиск в Google откроется автоматически";
+                    font-size: Theme.font-body-m;
+                    color: Theme.on-surface-variant;
+                    horizontal-alignment: center;
+                }
+            }
+
+            ScrollView {
+                Text {
+                    x: 24px; y: 24px;
+                    width: parent.width - 48px;
+                    text: root.page-text;
+                    font-size: Theme.font-body-m;
+                    color: Theme.on-surface;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
