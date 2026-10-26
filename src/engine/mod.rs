@@ -36,4 +36,5 @@ pub struct LaidOutBox {
     pub height: f32,
     pub kind: BoxKind,
     pub content: BoxContent,
+    pub link: Option<String>,
 }

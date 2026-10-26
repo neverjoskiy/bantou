@@ -12,7 +12,7 @@ const AVG_GLYPH_RATIO: f32 = 0.52;
 pub fn layout(root: &DomNode, viewport_width: f32) -> Vec<LaidOutBox> {
     let mut ctx = LayoutCtx { boxes: Vec::new(), cursor_y: 0.0, viewport_width };
     for child in &root.children {
-        layout_node(child, &mut ctx, FontSpec::default());
+        layout_node(child, &mut ctx, FontSpec::default(), None);
     }
     ctx.boxes
 }
@@ -85,7 +85,7 @@ fn wrap_lines(text: &str, font: &FontSpec, max_width: f32) -> Vec<String> {
     lines
 }
 
-fn push_text_lines(ctx: &mut LayoutCtx, text: &str, font: FontSpec, inline: bool) {
+fn push_text_lines(ctx: &mut LayoutCtx, text: &str, font: FontSpec, inline: bool, link: Option<String>) {
     let max_width = ctx.viewport_width;
     if max_width <= 0.0 {
         return;
@@ -103,17 +103,18 @@ fn push_text_lines(ctx: &mut LayoutCtx, text: &str, font: FontSpec, inline: bool
             height,
             kind: if inline { BoxKind::InlineText } else { BoxKind::Block },
             content: BoxContent::Text(line, font),
+            link: link.clone(),
         });
         ctx.cursor_y += height;
     }
 }
 
 /// Инлайновое содержимое: текст и строчные теги слиянием шрифтов.
-fn layout_inline(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec) {
+fn layout_inline(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option<String>) {
     match node.tag.as_str() {
         "" => {
             if !node.text.is_empty() {
-                push_text_lines(ctx, &squash(&node.text), font, true);
+                push_text_lines(ctx, &squash(&node.text), font, true, link);
             }
         }
         "br" => ctx.cursor_y += line_height(&font),
@@ -122,17 +123,23 @@ fn layout_inline(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec) {
             let inner = font_for(&node.tag);
             let merged =
                 FontSpec { size: font.size, weight: inner.weight.max(font.weight) };
+            let new_link = if node.tag == "a" {
+                node.link.clone().or_else(|| node.attrs.get("href").cloned())
+            } else {
+                link.clone()
+            };
             for child in &node.children {
-                layout_inline(child, ctx, merged);
+                layout_inline(child, ctx, merged, new_link.clone());
             }
+            // text directly inside inline element (if any) already as children text nodes
         }
     }
 }
 
-fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec) {
+fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec, link: Option<String>) {
     if node.tag.is_empty() {
         if !node.text.trim().is_empty() {
-            push_text_lines(ctx, &squash(&node.text), font, false);
+            push_text_lines(ctx, &squash(&node.text), font, false, link);
         }
         return;
     }
@@ -148,6 +155,7 @@ fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec) {
                 height: 1.0,
                 kind: BoxKind::Rule,
                 content: BoxContent::Rule,
+                link: None,
             });
             ctx.cursor_y += 1.0 + after;
         }
@@ -157,12 +165,17 @@ fn layout_node(node: &DomNode, ctx: &mut LayoutCtx, font: FontSpec) {
             ctx.cursor_y += before;
             let inner = font_for(t);
             let font = if inner.size > font.size { inner } else { font };
+            let new_link = if t == "a" {
+                node.link.clone().or_else(|| node.attrs.get("href").cloned())
+            } else {
+                link.clone()
+            };
             for child in &node.children {
-                layout_node(child, ctx, font);
+                layout_node(child, ctx, font, new_link.clone());
             }
             ctx.cursor_y += after;
         }
-        _ => layout_inline(node, ctx, font),
+        _ => layout_inline(node, ctx, font, link),
     }
 }
 

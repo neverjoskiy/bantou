@@ -7,6 +7,18 @@ export struct TabInfo {
     loading: bool,
 }
 
+export struct BoxView {
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    size: float,
+    weight: int,
+    text: string,
+    is-rule: bool,
+    link: string,
+}
+
 export component TabButton inherits Rectangle {
     in property <int> tab-id;
     in property <string> tab-title;
@@ -93,6 +105,8 @@ export component BrowserWindow inherits Window {
     in property <float> load-progress: 0;      // 0..1, NaN/0 = idle
     in property <[string]> history-entries;
     in property <[string]> bookmark-entries;
+    in property <[BoxView]> page-boxes;
+    in property <float> page-content-height: 0;
 
     // ── Events to Rust ──────────────────────────────────────────
     callback navigate(string);
@@ -100,9 +114,17 @@ export component BrowserWindow inherits Window {
     callback tab-closed(int);
     callback new-tab();
     callback bookmark-toggled();
+    callback viewport-changed(float);
 
     private property <bool> sidebar-open: false;
     private property <bool> url-focused: false;
+
+    changed width => {
+        root.viewport-changed((self.width - (sidebar-open ? Theme.rail-width-expanded : Theme.rail-width-collapsed) - 48px) / 1px);
+    }
+    changed sidebar-open => {
+        root.viewport-changed((self.width - (sidebar-open ? Theme.rail-width-expanded : Theme.rail-width-collapsed) - 48px) / 1px);
+    }
 
     // ── Navigation rail (sidebar) ───────────────────────────────
     Rectangle {
@@ -170,6 +192,32 @@ export component BrowserWindow inherits Window {
                         padding-left: 14px;
                         spacing: 12px;
                         Text { text: "🕘"; color: Theme.on-surface-variant; vertical-alignment: center; }
+                        Text {
+                            text: entry;
+                            color: Theme.on-surface;
+                            font-size: Theme.font-body-s;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        clicked => { root.navigate(entry); }
+                    }
+                }
+            }
+
+            // Bookmarks
+            VerticalLayout {
+                spacing: 2px;
+                for entry in bookmark-entries: Rectangle {
+                    height: 40px;
+                    border-radius: Theme.shape-corner-full;
+                    background: transparent;
+                    animate background { duration: Theme.motion-short; }
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        spacing: 12px;
+                        Text { text: "⭐"; color: Theme.on-surface-variant; vertical-alignment: center; }
                         Text {
                             text: entry;
                             color: Theme.on-surface;
@@ -295,11 +343,11 @@ export component BrowserWindow inherits Window {
             }
         }
 
-        // ── Page content (Phase 2: laid-out boxes / Phase 1: text) ──
+        // ── Page content (Phase 2: laid-out boxes) ──
         Rectangle {
             background: Theme.surface-container-lowest;
 
-            if page-text == "" && load-progress >= 1: VerticalLayout {
+            if page-boxes.length == 0 && page-text == "" && load-progress >= 1: VerticalLayout {
                 alignment: center;
                 spacing: 16px;
                 Text {
@@ -317,7 +365,7 @@ export component BrowserWindow inherits Window {
                 }
             }
 
-            ScrollView {
+            if page-boxes.length == 0 && page-text != "": ScrollView {
                 Text {
                     x: 24px; y: 24px;
                     width: parent.width - 48px;
@@ -325,6 +373,35 @@ export component BrowserWindow inherits Window {
                     font-size: Theme.font-body-m;
                     color: Theme.on-surface;
                     wrap: word-wrap;
+                }
+            }
+
+            if page-boxes.length > 0: ScrollView {
+                Rectangle {
+                    width: parent.width;
+                    height: root.page-content-height * 1px;
+                    for box in root.page-boxes: Rectangle {
+                        x: box.x * 1px;
+                        y: box.y * 1px;
+                        width: box.width * 1px;
+                        height: box.height * 1px;
+                        if box.is-rule: Rectangle {
+                            width: parent.width;
+                            height: 1px;
+                            y: 0;
+                            background: Theme.outline-variant;
+                        }
+                        if !box.is-rule: Text {
+                            text: box.text;
+                            font-size: box.size * 1px;
+                            font-weight: box.weight;
+                            color: box.link != "" ? Theme.primary : Theme.on-surface;
+                            wrap: no-wrap;
+                        }
+                        if box.link != "": TouchArea {
+                            clicked => { root.navigate(box.link); }
+                        }
+                    }
                 }
             }
         }

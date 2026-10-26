@@ -12,15 +12,16 @@ pub struct DomNode {
     pub attrs: HashMap<String, String>,
     pub children: Vec<DomNode>,
     pub text: String,
+    pub link: Option<String>,
 }
 
 impl DomNode {
     fn element(tag: &str, attrs: HashMap<String, String>) -> Self {
-        Self { tag: tag.to_string(), attrs, children: Vec::new(), text: String::new() }
+        Self { tag: tag.to_string(), attrs, children: Vec::new(), text: String::new(), link: None }
     }
 
     fn text_node(text: &str) -> Self {
-        Self { tag: String::new(), attrs: HashMap::new(), children: Vec::new(), text: text.to_string() }
+        Self { tag: String::new(), attrs: HashMap::new(), children: Vec::new(), text: text.to_string(), link: None }
     }
 
     /// Первое значение атрибута по цепочке предков не ищем — только сам узел.
@@ -48,6 +49,9 @@ fn convert(handle: &Handle) -> DomNode {
                 .map(|a| (a.name.local.to_string(), a.value.to_string()))
                 .collect();
             let mut node = DomNode::element(name.local.as_ref(), attrs);
+            if name.local.as_ref() == "a" {
+                node.link = node.attrs.get("href").cloned();
+            }
             for child in handle.children.borrow().iter() {
                 node.children.push(convert(child));
             }

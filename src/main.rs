@@ -7,7 +7,8 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use tokio::runtime::Runtime;
 
-use crate::engine::{html, layout, net, BoxContent};
+use crate::engine::{html, layout, net, BoxContent, LaidOutBox};
+use crate::engine::html::DomNode;
 
 slint::include_modules!();
 
@@ -17,6 +18,7 @@ struct TabState {
     url: String,
     loading: bool,
     text: String,
+    dom: Option<DomNode>,
 }
 
 struct AppState {
@@ -25,50 +27,11 @@ struct AppState {
     next_tab_id: usize,
     tabs: Vec<TabState>,
     active: usize, // индекс в tabs
+    history: Vec<String>,
+    bookmarks: Vec<String>,
+    viewport_width: f32,
 }
 
-impl AppState {
-    /// Запускает загрузку страницы вне потока UI; результат — через event loop.
-    fn spawn_load(&self, app: slint::Weak<BrowserWindow>, url: String) {
-        let client = self.client.clone();
-        let rt = self.rt.clone();
-        std::thread::spawn(move || {
-            rt.block_on(async move {
-                let result = net::fetch_text(&client, &url).await;
-                let outcome = match &result {
-                    Ok(raw) => {
-                        let dom = html::parse(raw);
-                        let title = html::title_of(&dom).unwrap_or_else(|| url.clone());
-                        // Ширина контента после сайдбара (80px) и полей.
-                        let boxes = layout::layout(&dom, 1080.0);
-                        let mut text = String::new();
-                        for b in &boxes {
-                            if let BoxContent::Text(line, _) = &b.content {
-                                text.push_str(line);
-                                text.push('\n');
-                            }
-                        }
-                        (title, text)
-                    }
-                    Err(e) => {
-                        ("Ошибка".to_string(), format!("Не удалось загрузить {url}: {e}"))
-                    }
-                };
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(app) = app.upgrade() {
-                        let (title, text) = outcome;
-                        app.set_page_title(title.into());
-                        app.set_page_text(text.into());
-                        app.set_current_url(url.into());
-                        app.set_load_progress(1.0);
-                    }
-                });
-            });
-        });
-    }
-}
-
-/// Синхронизирует вкладки из Rust-состояния в модель Slint.
 fn sync_tabs(app: &slint::Weak<BrowserWindow>, state: &AppState) {
     let Some(app) = app.upgrade() else { return };
     let rows: Vec<TabInfo> = state
@@ -81,10 +44,65 @@ fn sync_tabs(app: &slint::Weak<BrowserWindow>, state: &AppState) {
         })
         .collect();
     app.set_tabs(ModelRc::new(VecModel::from(rows)));
-    app.set_active_tab_id(state.tabs[state.active].id as i32);
+    if !state.tabs.is_empty() {
+        app.set_active_tab_id(state.tabs[state.active].id as i32);
+    }
 }
 
-/// Поисковая строка: URL или Google-поиск.
+fn boxes_to_view(boxes: &[LaidOutBox]) -> (Vec<BoxView>, f32) {
+    let mut views = Vec::new();
+    let mut height = 0.0f32;
+    for b in boxes {
+        let (text, size, weight, is_rule, link) = match &b.content {
+            BoxContent::Text(t, spec) => (
+                t.clone(),
+                spec.size,
+                spec.weight as i32,
+                false,
+                b.link.clone().unwrap_or_default(),
+            ),
+            BoxContent::Rule => (String::new(), 0.0, 0, true, String::new()),
+        };
+        views.push(BoxView {
+            x: b.x,
+            y: b.y,
+            width: b.width,
+            height: b.height,
+            size,
+            weight,
+            text,
+            is_rule,
+            link,
+        });
+        height = height.max(b.y + b.height);
+    }
+    (views, height)
+}
+
+fn sync_boxes(app: &BrowserWindow, boxes: &[LaidOutBox]) {
+    let (views, height) = boxes_to_view(boxes);
+    app.set_page_boxes(ModelRc::new(VecModel::from(views)));
+    app.set_page_content_height(height);
+}
+
+fn restore_active(app: &BrowserWindow, st: &AppState) {
+    if st.tabs.is_empty() {
+        return;
+    }
+    let idx = st.active;
+    let tab = &st.tabs[idx];
+    app.set_page_title(tab.title.clone().into());
+    app.set_page_text(tab.text.clone().into());
+    app.set_current_url(tab.url.clone().into());
+    app.set_load_progress(if tab.loading { 0.3 } else { 0.0 });
+    let boxes = tab
+        .dom
+        .as_ref()
+        .map(|d| layout::layout(d, st.viewport_width))
+        .unwrap_or_default();
+    sync_boxes(app, &boxes);
+}
+
 fn normalize_url(input: &str) -> String {
     let t = input.trim();
     if t.starts_with("http://") || t.starts_with("https://") {
@@ -94,6 +112,78 @@ fn normalize_url(input: &str) -> String {
         return format!("https://{t}");
     }
     format!("https://www.google.com/search?q={}", urlencoding::encode(t))
+}
+
+fn spawn_load(
+    state_rc: Rc<RefCell<AppState>>,
+    app_weak: slint::Weak<BrowserWindow>,
+    tab_id: usize,
+    url: String,
+    viewport_width: f32,
+) {
+    let (client, rt) = {
+        let st = state_rc.borrow();
+        (st.client.clone(), st.rt.clone())
+    };
+    std::thread::spawn(move || {
+        rt.block_on(async move {
+            let result = net::fetch_text(&client, &url).await;
+            let outcome = match &result {
+                Ok(raw) => {
+                    let dom = html::parse(raw);
+                    let title = html::title_of(&dom).unwrap_or_else(|| url.clone());
+                    let boxes = layout::layout(&dom, viewport_width);
+                    let mut text = String::new();
+                    for b in &boxes {
+                        if let BoxContent::Text(line, _) = &b.content {
+                            text.push_str(line);
+                            text.push('\n');
+                        }
+                    }
+                    (title, text, Some(dom), boxes, true)
+                }
+                Err(e) => (
+                    "Ошибка".to_string(),
+                    format!("Не удалось загрузить {url}: {e}"),
+                    None,
+                    Vec::new(),
+                    false,
+                ),
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = app_weak.upgrade() {
+                    let (title, text, dom, boxes, ok) = outcome;
+                    let mut st = state_rc.borrow_mut();
+                    if let Some(tab) = st.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        tab.title = title.clone();
+                        tab.text = text.clone();
+                        tab.url = url.clone();
+                        tab.dom = dom;
+                        tab.loading = false;
+                    }
+                    let is_active = st.tabs.get(st.active).map(|t| t.id) == Some(tab_id);
+                    if ok {
+                        if !st.history.last().map(|u| u == &url).unwrap_or(false) {
+                            st.history.push(url.clone());
+                        }
+                    }
+                    let history = st.history.clone();
+                    let bookmarks = st.bookmarks.clone();
+                    drop(st);
+
+                    if is_active {
+                        app.set_page_title(title.into());
+                        app.set_page_text(text.into());
+                        app.set_current_url(url.into());
+                        app.set_load_progress(if ok { 1.0 } else { 0.0 });
+                        sync_boxes(&app, &boxes);
+                    }
+                    app.set_history_entries(ModelRc::new(VecModel::from(history)));
+                    app.set_bookmark_entries(ModelRc::new(VecModel::from(bookmarks)));
+                }
+            });
+        });
+    });
 }
 
 fn main() {
@@ -112,13 +202,19 @@ fn main() {
             url: String::new(),
             loading: false,
             text: String::new(),
+            dom: None,
         }],
         active: 0,
+        history: Vec::new(),
+        bookmarks: Vec::new(),
+        viewport_width: 1080.0,
     }));
 
     sync_tabs(&app, &state.borrow());
+    let app_weak = app.as_weak();
+    restore_active(&app, &state.borrow());
 
-    // navigate: помечаем вкладку загружающейся и уходим в пул tokio.
+    // navigate
     {
         let app_weak = app.as_weak();
         let state = state.clone();
@@ -127,23 +223,27 @@ fn main() {
             let app_weak = app_weak.clone();
             let state = state.clone();
 
-            {
+            let tab_id = {
                 let mut st = state.borrow_mut();
                 if let Some(tab) = st.tabs.get_mut(st.active) {
                     tab.loading = true;
                     tab.title = "Загрузка…".into();
                     tab.url = url.clone();
+                    tab.dom = None;
                 }
-                if let Some(app) = app_weak.upgrade() {
-                    app.set_load_progress(0.15);
-                    app.set_current_url(url.clone().into());
-                }
+                st.tabs.get(st.active).map(|t| t.id).unwrap_or(0)
+            };
+            if let Some(app) = app_weak.upgrade() {
+                app.set_load_progress(0.15);
+                app.set_current_url(url.clone().into());
             }
             sync_tabs(&app_weak, &state.borrow());
-            state.borrow().spawn_load(app_weak.clone(), url);
+            let viewport_width = state.borrow().viewport_width;
+            spawn_load(state.clone(), app_weak.clone(), tab_id, url, viewport_width);
         });
     }
 
+    // new tab
     {
         let app_weak = app.as_weak();
         let state = state.clone();
@@ -157,47 +257,109 @@ fn main() {
                 url: String::new(),
                 loading: false,
                 text: String::new(),
+                dom: None,
             });
             st.active = st.tabs.len() - 1;
             drop(st);
             sync_tabs(&app_weak, &state.borrow());
+            if let Some(app) = app_weak.upgrade() {
+                restore_active(&app, &state.borrow());
+            }
         });
     }
 
+    // tab selected
     {
         let app_weak = app.as_weak();
         let state = state.clone();
         app.on_tab_selected(move |id| {
-            let st = state.borrow();
+            let mut st = state.borrow_mut();
             if let Some(idx) = st.tabs.iter().position(|t| t.id as i32 == id) {
                 st.active = idx;
-                let tab = &st.tabs[idx];
-                if let Some(app) = app_weak.upgrade() {
-                    app.set_page_title(tab.title.clone().into());
-                    app.set_page_text(tab.text.clone().into());
-                    app.set_current_url(tab.url.clone().into());
-                    app.set_load_progress(if tab.loading { 0.3 } else { 0.0 });
-                }
             }
             drop(st);
+            if let Some(app) = app_weak.upgrade() {
+                restore_active(&app, &state.borrow());
+            }
             sync_tabs(&app_weak, &state.borrow());
         });
     }
 
+    // tab closed
     {
+        let app_weak = app.as_weak();
         let state = state.clone();
         app.on_tab_closed(move |id| {
             let mut st = state.borrow_mut();
             if let Some(idx) = st.tabs.iter().position(|t| t.id as i32 == id) {
                 st.tabs.remove(idx);
+                if st.tabs.is_empty() {
+                    // keep at least one tab
+                    st.tabs.push(TabState {
+                        id: st.next_tab_id,
+                        title: "Новая вкладка".into(),
+                        url: String::new(),
+                        loading: false,
+                        text: String::new(),
+                        dom: None,
+                    });
+                    st.next_tab_id += 1;
+                }
                 if st.active >= st.tabs.len() {
                     st.active = st.tabs.len().saturating_sub(1);
                 }
             }
+            drop(st);
+            if let Some(app) = app_weak.upgrade() {
+                restore_active(&app, &state.borrow());
+            }
+            sync_tabs(&app_weak, &state.borrow());
         });
     }
 
-    app.on_bookmark_toggled(move || {});
+    // bookmark toggled
+    {
+        let app_weak = app.as_weak();
+        let state = state.clone();
+        app.on_bookmark_toggled(move || {
+            let mut st = state.borrow_mut();
+            let url = st.tabs.get(st.active).map(|t| t.url.clone()).unwrap_or_default();
+            if url.is_empty() {
+                return;
+            }
+            if let Some(pos) = st.bookmarks.iter().position(|u| u == &url) {
+                st.bookmarks.remove(pos);
+            } else {
+                st.bookmarks.push(url);
+            }
+            let bookmarks = st.bookmarks.clone();
+            drop(st);
+            if let Some(app) = app_weak.upgrade() {
+                app.set_bookmark_entries(ModelRc::new(VecModel::from(bookmarks)));
+            }
+        });
+    }
+
+    // viewport changed
+    {
+        let app_weak = app.as_weak();
+        let state = state.clone();
+        app.on_viewport_changed(move |w| {
+            if w <= 0.0 {
+                return;
+            }
+            let mut st = state.borrow_mut();
+            st.viewport_width = w;
+            let dom = st.tabs.get(st.active).and_then(|t| t.dom.clone());
+            drop(st);
+            if let Some(dom) = dom {
+                let boxes = layout::layout(&dom, w);
+                if let Some(app) = app_weak.upgrade() {
+                    sync_boxes(&app, &boxes);
+                }
+            }
+        });
+    }
 
     app.run().unwrap();
 }
