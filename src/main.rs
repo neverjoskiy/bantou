@@ -115,14 +115,14 @@ fn normalize_url(input: &str) -> String {
 }
 
 fn spawn_load(
-    state_rc: Rc<RefCell<AppState>>,
+    state_rc: Arc<Mutex<AppState>>,
     app_weak: slint::Weak<BrowserWindow>,
     tab_id: usize,
     url: String,
     viewport_width: f32,
 ) {
     let (client, rt) = {
-        let st = state_rc.borrow();
+        let st = state_rc.lock().unwrap();
         (st.client.clone(), st.rt.clone())
     };
     std::thread::spawn(move || {
@@ -153,7 +153,7 @@ fn spawn_load(
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = app_weak.upgrade() {
                     let (title, text, dom, boxes, ok) = outcome;
-                    let mut st = state_rc.borrow_mut();
+                    let mut st = state_rc.lock().unwrap();
                     if let Some(tab) = st.tabs.iter_mut().find(|t| t.id == tab_id) {
                         tab.title = title.clone();
                         tab.text = text.clone();
@@ -194,7 +194,7 @@ fn main() {
     let client = net::build_client().expect("reqwest client");
 
     let app = BrowserWindow::new().expect("slint window");
-    let state = Rc::new(RefCell::new(AppState {
+    let state = Arc::new(Mutex::new(AppState {
         rt,
         client,
         next_tab_id: 2,
@@ -212,9 +212,9 @@ fn main() {
         viewport_width: 1080.0,
     }));
 
-    sync_tabs(&app.as_weak(), &state.borrow());
+    sync_tabs(&app.as_weak(), &state.lock().unwrap());
     let app_weak = app.as_weak();
-    restore_active(&app, &state.borrow());
+    restore_active(&app, &state.lock().unwrap());
 
     // navigate
     {
@@ -226,8 +226,9 @@ fn main() {
             let state = state.clone();
 
             let tab_id = {
-                let mut st = state.borrow_mut();
-                if let Some(tab) = st.tabs.get_mut(st.active) {
+                let mut st = state.lock().unwrap();
+                let active = st.active;
+                if let Some(tab) = st.tabs.get_mut(active) {
                     tab.loading = true;
                     tab.title = "Загрузка…".into();
                     tab.url = url.clone();
@@ -239,8 +240,8 @@ fn main() {
                 app.set_load_progress(0.15);
                 app.set_current_url(url.clone().into());
             }
-            sync_tabs(&app_weak, &state.borrow());
-            let viewport_width = state.borrow().viewport_width;
+            sync_tabs(&app_weak, &state.lock().unwrap());
+            let viewport_width = state.lock().unwrap().viewport_width;
             spawn_load(state.clone(), app_weak.clone(), tab_id, url, viewport_width);
         });
     }
@@ -250,7 +251,7 @@ fn main() {
         let app_weak = app.as_weak();
         let state = state.clone();
         app.on_new_tab(move || {
-            let mut st = state.borrow_mut();
+            let mut st = state.lock().unwrap();
             let id = st.next_tab_id;
             st.next_tab_id += 1;
             st.tabs.push(TabState {
@@ -263,9 +264,9 @@ fn main() {
             });
             st.active = st.tabs.len() - 1;
             drop(st);
-            sync_tabs(&app_weak, &state.borrow());
+            sync_tabs(&app_weak, &state.lock().unwrap());
             if let Some(app) = app_weak.upgrade() {
-                restore_active(&app, &state.borrow());
+                restore_active(&app, &state.lock().unwrap());
             }
         });
     }
@@ -275,15 +276,15 @@ fn main() {
         let app_weak = app.as_weak();
         let state = state.clone();
         app.on_tab_selected(move |id| {
-            let mut st = state.borrow_mut();
+            let mut st = state.lock().unwrap();
             if let Some(idx) = st.tabs.iter().position(|t| t.id as i32 == id) {
                 st.active = idx;
             }
             drop(st);
             if let Some(app) = app_weak.upgrade() {
-                restore_active(&app, &state.borrow());
+                restore_active(&app, &state.lock().unwrap());
             }
-            sync_tabs(&app_weak, &state.borrow());
+            sync_tabs(&app_weak, &state.lock().unwrap());
         });
     }
 
@@ -292,20 +293,21 @@ fn main() {
         let app_weak = app.as_weak();
         let state = state.clone();
         app.on_tab_closed(move |id| {
-            let mut st = state.borrow_mut();
+            let mut st = state.lock().unwrap();
             if let Some(idx) = st.tabs.iter().position(|t| t.id as i32 == id) {
                 st.tabs.remove(idx);
                 if st.tabs.is_empty() {
                     // keep at least one tab
+                    let new_id = st.next_tab_id;
+                    st.next_tab_id += 1;
                     st.tabs.push(TabState {
-                        id: st.next_tab_id,
+                        id: new_id,
                         title: "Новая вкладка".into(),
                         url: String::new(),
                         loading: false,
                         text: String::new(),
                         dom: None,
                     });
-                    st.next_tab_id += 1;
                 }
                 if st.active >= st.tabs.len() {
                     st.active = st.tabs.len().saturating_sub(1);
@@ -313,9 +315,9 @@ fn main() {
             }
             drop(st);
             if let Some(app) = app_weak.upgrade() {
-                restore_active(&app, &state.borrow());
+                restore_active(&app, &state.lock().unwrap());
             }
-            sync_tabs(&app_weak, &state.borrow());
+            sync_tabs(&app_weak, &state.lock().unwrap());
         });
     }
 
@@ -324,7 +326,7 @@ fn main() {
         let app_weak = app.as_weak();
         let state = state.clone();
         app.on_bookmark_toggled(move || {
-            let mut st = state.borrow_mut();
+            let mut st = state.lock().unwrap();
             let url = st.tabs.get(st.active).map(|t| t.url.clone()).unwrap_or_default();
             if url.is_empty() {
                 return;
@@ -351,7 +353,7 @@ fn main() {
             if w <= 0.0 {
                 return;
             }
-            let mut st = state.borrow_mut();
+            let mut st = state.lock().unwrap();
             st.viewport_width = w;
             let dom = st.tabs.get(st.active).and_then(|t| t.dom.clone());
             drop(st);
