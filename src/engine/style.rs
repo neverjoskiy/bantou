@@ -222,5 +222,3 @@ pub fn compute_style(node: &DomNode, rules: &[Rule], parent: &Style) -> Style {
     }
     style
 }
-EOF
-Write-Host done

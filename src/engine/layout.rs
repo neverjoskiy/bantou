@@ -211,5 +211,3 @@ fn squash(text: &str) -> String {
     }
     out
 }
-EOF
-Write-Host done
