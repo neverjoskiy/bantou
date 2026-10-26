@@ -70,9 +70,9 @@ fn boxes_to_view(boxes: &[LaidOutBox]) -> (Vec<BoxView>, f32) {
             height: b.height,
             size,
             weight,
-            text,
+            text: text.into(),
             is_rule,
-            link,
+            link: link.into(),
         });
         height = height.max(b.y + b.height);
     }
@@ -178,6 +178,8 @@ fn spawn_load(
                         app.set_load_progress(if ok { 1.0 } else { 0.0 });
                         sync_boxes(&app, &boxes);
                     }
+                    let history: Vec<slint::SharedString> = history.into_iter().map(Into::into).collect();
+                    let bookmarks: Vec<slint::SharedString> = bookmarks.into_iter().map(Into::into).collect();
                     app.set_history_entries(ModelRc::new(VecModel::from(history)));
                     app.set_bookmark_entries(ModelRc::new(VecModel::from(bookmarks)));
                 }
@@ -210,7 +212,7 @@ fn main() {
         viewport_width: 1080.0,
     }));
 
-    sync_tabs(&app, &state.borrow());
+    sync_tabs(&app.as_weak(), &state.borrow());
     let app_weak = app.as_weak();
     restore_active(&app, &state.borrow());
 
@@ -334,6 +336,7 @@ fn main() {
             }
             let bookmarks = st.bookmarks.clone();
             drop(st);
+            let bookmarks: Vec<slint::SharedString> = bookmarks.into_iter().map(Into::into).collect();
             if let Some(app) = app_weak.upgrade() {
                 app.set_bookmark_entries(ModelRc::new(VecModel::from(bookmarks)));
             }
