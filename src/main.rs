@@ -1,8 +1,8 @@
 mod engine;
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 use tokio::runtime::Runtime;
